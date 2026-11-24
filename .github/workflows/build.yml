@@ -12,13 +12,21 @@ jobs:
   superwhisper:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: About this Mac
         run: |
           sw_vers
           uname -m
           echo "signed in: $(stat -f%Su /dev/console)"
+
+      - name: Check the Accessibility profile
+        run: |
+          set -euo pipefail
+          P=superwhisper/profile/Superwhisper-Accessibility.mobileconfig
+          plutil -lint "$P"
+          plutil -extract PayloadContent.0.Services.Accessibility.0.CodeRequirement raw "$P" > /tmp/req.txt
+          echo "profile requirement: $(cat /tmp/req.txt)"
 
       - name: Build package
         run: |
@@ -44,6 +52,8 @@ jobs:
           echo "--- designated requirement"
           codesign -d -r- "$APP"
           codesign -dv "$APP" 2>&1 | grep -E '^(Identifier|TeamIdentifier|Authority)'
+          echo "--- the app must satisfy the profile's requirement"
+          codesign --verify -R="$(cat /tmp/req.txt)" "$APP" && echo "requirement satisfied"
           defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString
           echo "--- chrome signer"
           curl -fsSL -o /tmp/chrome.pkg https://dl.google.com/dl/chrome/mac/universal/stable/gcem/GoogleChrome.pkg

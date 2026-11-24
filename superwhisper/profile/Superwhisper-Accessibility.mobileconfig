@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadDisplayName</key>
+			<string>Superwhisper Accessibility</string>
+			<key>PayloadIdentifier</key>
+			<string>com.intergate.pppc.superwhisper.tcc</string>
+			<key>PayloadType</key>
+			<string>com.apple.TCC.configuration-profile-policy</string>
+			<key>PayloadUUID</key>
+			<string>4763D2FA-F502-43DA-89C1-8C07968AEA2E</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>Services</key>
+			<dict>
+				<key>Accessibility</key>
+				<array>
+					<dict>
+						<key>Authorization</key>
+						<string>Allow</string>
+						<key>CodeRequirement</key>
+						<string>anchor apple generic and identifier "com.superduper.superwhisper" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = XDP69BYUP9)</string>
+						<key>Comment</key>
+						<string>Lets Superwhisper use its keyboard shortcuts and paste dictation into other apps.</string>
+						<key>Identifier</key>
+						<string>com.superduper.superwhisper</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Pre-approves Superwhisper's Accessibility permission. The microphone still needs the person's Allow.</string>
+	<key>PayloadDisplayName</key>
+	<string>Superwhisper Accessibility</string>
+	<key>PayloadIdentifier</key>
+	<string>com.intergate.pppc.superwhisper</string>
+	<key>PayloadOrganization</key>
+	<string>Intergate</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>1A8615C2-58CC-4C40-8C23-F6A7E1EB46D6</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>
