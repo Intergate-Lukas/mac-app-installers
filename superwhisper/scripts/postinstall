@@ -1,0 +1,76 @@
+#!/bin/bash
+# Installs Superwhisper, and Google Chrome if it is missing, on a managed Mac.
+# Apple Business sends this package; macOS runs this script as root after the
+# package installs. Every download is checked before anything is installed.
+set -uo pipefail
+
+LOG=/var/log/intergate-app-install.log
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
+
+# Superwhisper 3.2.2: the same file and fingerprint Homebrew's cask pins.
+SW_URL="https://builds.superwhisper.com/v3.2.2/superwhisper.zip"
+SW_SHA256="d6d54e579ed3ff55c2c839fa1639897e730db3b81bdfe22d611ff006d00d9898"
+SW_TEAM="XDP69BYUP9"   # SuperUltra, Inc. (from Superwhisper's MDM guide)
+
+# Google Chrome: Google's installer for company deployment. It always serves
+# the newest version, so it is checked by Google's signature, not a fingerprint.
+CHROME_URL="https://dl.google.com/dl/chrome/mac/universal/stable/gcem/GoogleChrome.pkg"
+CHROME_TEAM="EQHXZ8M8AV"   # Google LLC
+
+WORK=$(mktemp -d /private/tmp/intergate-app-install.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+install_superwhisper() {
+  if [ -d /Applications/superwhisper.app ]; then
+    echo "superwhisper: already installed, skipped"
+    return 0
+  fi
+  curl -fsSL --retry 3 -o "$WORK/sw.zip" "$SW_URL" || { echo "superwhisper: download failed"; return 1; }
+  local got
+  got=$(shasum -a 256 "$WORK/sw.zip" | awk '{print $1}')
+  if [ "$got" != "$SW_SHA256" ]; then
+    echo "superwhisper: fingerprint mismatch ($got), not installed"
+    return 1
+  fi
+  ditto -x -k "$WORK/sw.zip" "$WORK/sw" || { echo "superwhisper: unzip failed"; return 1; }
+  local app
+  app=$(find "$WORK/sw" -maxdepth 2 -name superwhisper.app -type d | head -1)
+  [ -n "$app" ] || { echo "superwhisper: app not found in zip"; return 1; }
+  codesign --verify --deep --strict "$app" || { echo "superwhisper: signature check failed"; return 1; }
+  codesign -dv "$app" 2>&1 | grep -q "TeamIdentifier=$SW_TEAM" || { echo "superwhisper: not signed by $SW_TEAM"; return 1; }
+  ditto "$app" /Applications/superwhisper.app || { echo "superwhisper: copy failed"; return 1; }
+
+  # Give the app to the person signed in, so its own updates can try to
+  # install without an admin. If nobody is signed in, it stays with root.
+  local user
+  user=$(stat -f%Su /dev/console)
+  case "$user" in
+    ""|root|loginwindow|_mbsetupuser) echo "superwhisper: no one signed in, app left with root" ;;
+    *) chown -R "$user":staff /Applications/superwhisper.app && echo "superwhisper: app given to $user" ;;
+  esac
+  echo "superwhisper: installed 3.2.2"
+}
+
+install_chrome() {
+  if [ -d "/Applications/Google Chrome.app" ]; then
+    echo "chrome: already installed, skipped"
+    return 0
+  fi
+  curl -fsSL --retry 3 -o "$WORK/chrome.pkg" "$CHROME_URL" || { echo "chrome: download failed"; return 1; }
+  local sig
+  sig=$(pkgutil --check-signature "$WORK/chrome.pkg")
+  echo "$sig" | grep -q "($CHROME_TEAM)" || { echo "chrome: not signed by Google ($CHROME_TEAM), not installed"; return 1; }
+  echo "$sig" | grep -q "Status: signed by a developer certificate issued by Apple" || { echo "chrome: signature not trusted, not installed"; return 1; }
+  installer -pkg "$WORK/chrome.pkg" -target / || { echo "chrome: install failed"; return 1; }
+  echo "chrome: installed"
+}
+
+failed=0
+install_superwhisper || failed=1
+install_chrome || failed=1
+
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') end (failed=$failed)"
+# A non-zero exit marks the install as failed, so Apple Business can try again.
+# Anything already installed is skipped on the next try.
+exit "$failed"

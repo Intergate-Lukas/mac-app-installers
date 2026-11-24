@@ -1,0 +1,89 @@
+name: Build and test package
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  superwhisper:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: About this Mac
+        run: |
+          sw_vers
+          uname -m
+          echo "signed in: $(stat -f%Su /dev/console)"
+
+      - name: Build package
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0"; fi
+          chmod 755 superwhisper/scripts/postinstall
+          mkdir -p build
+          pkgbuild --root superwhisper/payload --scripts superwhisper/scripts \
+            --identifier com.intergate.appinstall.superwhisper --version "$VERSION" \
+            --install-location / build/component.pkg
+          PKG="build/Install-Superwhisper-$VERSION.pkg"
+          productbuild --package build/component.pkg "$PKG"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          pkgutil --payload-files "$PKG"
+
+      - name: Superwhisper code requirement and Chrome signer
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/sw.zip https://builds.superwhisper.com/v3.2.2/superwhisper.zip
+          shasum -a 256 /tmp/sw.zip
+          ditto -x -k /tmp/sw.zip /tmp/sw
+          APP=$(find /tmp/sw -maxdepth 2 -name superwhisper.app -type d | head -1)
+          echo "--- designated requirement"
+          codesign -d -r- "$APP"
+          codesign -dv "$APP" 2>&1 | grep -E '^(Identifier|TeamIdentifier|Authority)'
+          defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString
+          echo "--- chrome signer"
+          curl -fsSL -o /tmp/chrome.pkg https://dl.google.com/dl/chrome/mac/universal/stable/gcem/GoogleChrome.pkg
+          pkgutil --check-signature /tmp/chrome.pkg
+
+      - name: Test install on this Mac
+        run: |
+          set -euo pipefail
+          # Move both apps away so the real install path runs for each.
+          [ -d "/Applications/Google Chrome.app" ] && sudo mv "/Applications/Google Chrome.app" /private/tmp/chrome-was-here.app
+          [ -d /Applications/superwhisper.app ] && sudo mv /Applications/superwhisper.app /private/tmp/sw-was-here.app
+          sudo installer -pkg "$PKG" -target /
+          echo "--- log after first install"
+          sudo cat /var/log/intergate-app-install.log
+          test -d /Applications/superwhisper.app
+          test -d "/Applications/Google Chrome.app"
+          codesign --verify --deep --strict /Applications/superwhisper.app
+          codesign --verify --deep --strict "/Applications/Google Chrome.app"
+          ls -ld /Applications/superwhisper.app "/Applications/Google Chrome.app"
+          pkgutil --pkgs | grep -E 'com.intergate|com.google.Chrome'
+          cat "/Library/Application Support/Intergate/app-install/README.txt"
+          echo "--- second install, both apps present, must skip"
+          sudo installer -pkg "$PKG" -target /
+          sudo tail -4 /var/log/intergate-app-install.log
+          sudo tail -4 /var/log/intergate-app-install.log | grep -q 'superwhisper: already installed, skipped'
+          sudo tail -4 /var/log/intergate-app-install.log | grep -q 'chrome: already installed, skipped'
+
+      - name: Fingerprint
+        run: shasum -a 256 "$PKG"
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA=$(shasum -a 256 "$PKG" | awk '{print $1}')
+          gh release create "$GITHUB_REF_NAME" "$PKG" \
+            --title "Install Superwhisper ${GITHUB_REF_NAME}" \
+            --notes "Installs Superwhisper 3.2.2, plus Google Chrome if missing. Tested on GitHub's macOS runner before release.
+
+          SHA-256: \`$SHA\`
+          Bundle ID for Apple Business: \`com.superduper.superwhisper\`"
