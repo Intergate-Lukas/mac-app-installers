@@ -1,0 +1,5 @@
+This Mac got Google Chrome from the "Install Chrome" package, sent through Apple Business.
+If it was already installed, it was left as it was.
+
+What the install did: /var/log/intergate-app-install.log
+How it works: https://github.com/Intergate-Lukas/mac-app-installers

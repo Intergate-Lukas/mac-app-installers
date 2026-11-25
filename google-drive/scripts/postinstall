@@ -1,0 +1,51 @@
+#!/bin/bash
+# Installs Google Drive for desktop on a managed Mac, if it is missing.
+# Apple Business sends this package; macOS runs this script as root after the
+# package installs. The download is checked before anything is installed.
+#
+# Google's Drive installer also adds Google Docs, Sheets and Slides to
+# /Applications, which open the web apps.
+set -uo pipefail
+
+LOG=/var/log/intergate-app-install.log
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') start: Install Google Drive"
+
+# Google ships Drive as a signed installer inside a disk image. The link always
+# serves the newest version, so the installer is checked by Google's signature,
+# not a fingerprint. Drive keeps itself up to date afterwards with Google's updater.
+DRIVE_URL="https://dl.google.com/drive-file-stream/GoogleDrive.dmg"
+GOOGLE_TEAM="EQHXZ8M8AV"   # Google LLC
+
+WORK=$(mktemp -d /private/tmp/intergate-app-install.XXXXXX)
+MNT="$WORK/mnt"
+trap 'hdiutil detach "$MNT" -force -quiet 2>/dev/null; rm -rf "$WORK"' EXIT
+
+install_drive() {
+  if [ -d "/Applications/Google Drive.app" ]; then
+    echo "google-drive: already installed, skipped"
+    return 0
+  fi
+  curl -fsSL --retry 3 -o "$WORK/drive.dmg" "$DRIVE_URL" || { echo "google-drive: download failed"; return 1; }
+  mkdir -p "$MNT"
+  hdiutil attach "$WORK/drive.dmg" -nobrowse -readonly -noautoopen -mountpoint "$MNT" -quiet </dev/null \
+    || { echo "google-drive: could not open the disk image"; return 1; }
+  local src
+  src=$(find "$MNT" -maxdepth 2 -name '*.pkg' | head -1)
+  [ -n "$src" ] || { echo "google-drive: no installer in the disk image"; return 1; }
+  cp "$src" "$WORK/drive.pkg" || { echo "google-drive: copy failed"; return 1; }
+  hdiutil detach "$MNT" -quiet || true
+  local sig
+  sig=$(pkgutil --check-signature "$WORK/drive.pkg")
+  echo "$sig" | grep -q "($GOOGLE_TEAM)" || { echo "google-drive: not signed by Google ($GOOGLE_TEAM), not installed"; return 1; }
+  echo "$sig" | grep -q "Status: signed by a developer certificate issued by Apple" || { echo "google-drive: signature not trusted, not installed"; return 1; }
+  installer -pkg "$WORK/drive.pkg" -target / || { echo "google-drive: install failed"; return 1; }
+  echo "google-drive: installed"
+}
+
+failed=0
+install_drive || failed=1
+
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') end: Install Google Drive (failed=$failed)"
+# A non-zero exit marks the install as failed, so Apple Business can try again.
+exit "$failed"
