@@ -2,9 +2,12 @@ name: Build and test standard app packages
 
 # Chrome, Google Drive and CloudTalk: the apps on every Intergate Mac.
 # A tag like standard-v1.0.0 builds, tests and publishes all three.
+# A push to any other branch that touches them builds and tests only.
 on:
   push:
+    branches-ignore: [main]
     tags: ['standard-v*']
+    paths: ['chrome/**', 'google-drive/**', 'cloudtalk/**', '.github/workflows/standard.yml']
   workflow_dispatch:
 
 permissions:
