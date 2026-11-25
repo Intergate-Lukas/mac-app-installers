@@ -1,0 +1,39 @@
+#!/bin/bash
+# Installs Google Chrome on a managed Mac, if it is missing.
+# Apple Business sends this package; macOS runs this script as root after the
+# package installs. The download is checked before anything is installed.
+set -uo pipefail
+
+LOG=/var/log/intergate-app-install.log
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') start: Install Chrome"
+
+# Google's installer for company deployment. It always serves the newest
+# version, so it is checked by Google's signature, not a fingerprint.
+# Chrome keeps itself up to date afterwards with Google's updater.
+CHROME_URL="https://dl.google.com/dl/chrome/mac/universal/stable/gcem/GoogleChrome.pkg"
+GOOGLE_TEAM="EQHXZ8M8AV"   # Google LLC
+
+WORK=$(mktemp -d /private/tmp/intergate-app-install.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+install_chrome() {
+  if [ -d "/Applications/Google Chrome.app" ]; then
+    echo "chrome: already installed, skipped"
+    return 0
+  fi
+  curl -fsSL --retry 3 -o "$WORK/chrome.pkg" "$CHROME_URL" || { echo "chrome: download failed"; return 1; }
+  local sig
+  sig=$(pkgutil --check-signature "$WORK/chrome.pkg")
+  echo "$sig" | grep -q "($GOOGLE_TEAM)" || { echo "chrome: not signed by Google ($GOOGLE_TEAM), not installed"; return 1; }
+  echo "$sig" | grep -q "Status: signed by a developer certificate issued by Apple" || { echo "chrome: signature not trusted, not installed"; return 1; }
+  installer -pkg "$WORK/chrome.pkg" -target / || { echo "chrome: install failed"; return 1; }
+  echo "chrome: installed"
+}
+
+failed=0
+install_chrome || failed=1
+
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') end: Install Chrome (failed=$failed)"
+# A non-zero exit marks the install as failed, so Apple Business can try again.
+exit "$failed"

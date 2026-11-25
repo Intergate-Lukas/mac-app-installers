@@ -1,0 +1,122 @@
+name: Build and test standard app packages
+
+# Chrome, Google Drive and CloudTalk: the apps on every Intergate Mac.
+# A tag like standard-v1.0.0 builds, tests and publishes all three.
+# A push to any other branch that touches them builds and tests only.
+on:
+  push:
+    branches-ignore: [main]
+    tags: ['standard-v*']
+    paths: ['chrome/**', 'google-drive/**', 'cloudtalk/**', '.github/workflows/standard.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  standard:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: About this Mac
+        run: |
+          sw_vers
+          uname -m
+          echo "signed in: $(stat -f%Su /dev/console)"
+
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="${GITHUB_REF_NAME#standard-v}"; else VERSION="0.0.0"; fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          mkdir -p build
+          build() { # $1 = folder, $2 = name in the file
+            chmod 755 "$1/scripts/postinstall"
+            pkgbuild --root "$1/payload" --scripts "$1/scripts" \
+              --identifier "com.intergate.appinstall.$1" --version "$VERSION" \
+              --install-location / "build/$1-component.pkg"
+            productbuild --package "build/$1-component.pkg" "build/Install-$2-$VERSION.pkg"
+            rm "build/$1-component.pkg"
+            pkgutil --payload-files "build/Install-$2-$VERSION.pkg"
+          }
+          build chrome Chrome
+          build google-drive Google-Drive
+          build cloudtalk CloudTalk
+          ls -l build
+
+      - name: What the vendors serve today
+        run: |
+          set -euo pipefail
+          echo "--- chrome installer signer"
+          curl -fsSL -o /tmp/chrome.pkg https://dl.google.com/dl/chrome/mac/universal/stable/gcem/GoogleChrome.pkg
+          pkgutil --check-signature /tmp/chrome.pkg
+          echo "--- google drive installer signer"
+          curl -fsSL -o /tmp/drive.dmg https://dl.google.com/drive-file-stream/GoogleDrive.dmg
+          mkdir -p /tmp/drive-mnt
+          hdiutil attach /tmp/drive.dmg -nobrowse -readonly -noautoopen -mountpoint /tmp/drive-mnt -quiet </dev/null
+          ls -la /tmp/drive-mnt
+          pkgutil --check-signature /tmp/drive-mnt/*.pkg
+          hdiutil detach /tmp/drive-mnt -quiet
+          echo "--- cloudtalk app signer and notarisation"
+          curl -fsSL -o /tmp/ct.zip https://cloudtalk-phone-distribution.s3.amazonaws.com/CloudTalk-Phone-6.0.2-mac.zip
+          shasum -a 256 /tmp/ct.zip
+          ditto -x -k /tmp/ct.zip /tmp/ct
+          codesign -dv "/tmp/ct/CloudTalk Phone.app" 2>&1 | grep -E '^(Identifier|TeamIdentifier|Authority)'
+          spctl --assess --type execute -vv "/tmp/ct/CloudTalk Phone.app" || echo "spctl did not accept it (see above)"
+          xcrun stapler validate "/tmp/ct/CloudTalk Phone.app" || echo "no stapled ticket"
+
+      - name: Test install on this Mac
+        run: |
+          set -euo pipefail
+          # GitHub's Macs come with Chrome: move it away so the real install path runs.
+          [ -d "/Applications/Google Chrome.app" ] && sudo mv "/Applications/Google Chrome.app" /private/tmp/chrome-was-here.app
+          for a in "Google Drive.app" "CloudTalk Phone.app"; do
+            if [ -d "/Applications/$a" ]; then echo "$a is already on this Mac; the test would prove nothing"; exit 1; fi
+          done
+          for p in build/Install-*.pkg; do
+            echo "--- installing $p"
+            sudo installer -pkg "$p" -target /
+          done
+          echo "--- log after first install"
+          sudo cat /var/log/intergate-app-install.log
+          for a in "Google Chrome" "Google Drive" "CloudTalk Phone"; do
+            test -d "/Applications/$a.app"
+            codesign --verify --deep --strict "/Applications/$a.app"
+            echo "$a: $(defaults read "/Applications/$a.app/Contents/Info" CFBundleIdentifier) $(defaults read "/Applications/$a.app/Contents/Info" CFBundleShortVersionString)"
+          done
+          echo "--- Google and CloudTalk apps now in /Applications"
+          ls -ld /Applications/*.app | grep -E 'Google|CloudTalk'
+          pkgutil --pkgs | grep -E 'com.intergate|com.google'
+          ls "/Library/Application Support/Intergate/app-install/"
+          echo "--- second install, all three present, must skip"
+          for p in build/Install-*.pkg; do sudo installer -pkg "$p" -target /; done
+          sudo tail -9 /var/log/intergate-app-install.log
+          sudo tail -9 /var/log/intergate-app-install.log | grep -q 'chrome: already installed, skipped'
+          sudo tail -9 /var/log/intergate-app-install.log | grep -q 'google-drive: already installed, skipped'
+          sudo tail -9 /var/log/intergate-app-install.log | grep -q 'cloudtalk: already installed, skipped'
+
+      - name: Fingerprints
+        run: shasum -a 256 build/Install-*.pkg
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+          C="build/Install-Chrome-$VERSION.pkg"
+          D="build/Install-Google-Drive-$VERSION.pkg"
+          T="build/Install-CloudTalk-$VERSION.pkg"
+          {
+            echo "Chrome, Google Drive and CloudTalk for Intergate Macs. Each package installs its app only if the Mac doesn't have it. Tested on GitHub's macOS runner before release."
+            echo
+            echo "| Package | Bundle ID for Apple Business | SHA-256 |"
+            echo "|---|---|---|"
+            echo "| \`$(basename "$C")\` | \`com.google.Chrome\` | \`$(sha "$C")\` |"
+            echo "| \`$(basename "$D")\` | \`com.google.drivefs\` | \`$(sha "$D")\` |"
+            echo "| \`$(basename "$T")\` | \`com.cloudtalk-phone.app\` | \`$(sha "$T")\` |"
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "$C" "$D" "$T" \
+            --title "Standard Mac apps $VERSION" --notes-file notes.md

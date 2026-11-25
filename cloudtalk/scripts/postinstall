@@ -1,0 +1,59 @@
+#!/bin/bash
+# Installs CloudTalk Phone on a managed Mac, if it is missing.
+# Apple Business sends this package; macOS runs this script as root after the
+# package installs. The download is checked before anything is installed.
+set -uo pipefail
+
+LOG=/var/log/intergate-app-install.log
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') start: Install CloudTalk"
+
+# CloudTalk Phone 6.0.2 (released 2026-11-19): the zip CloudTalk's own updater
+# uses. Its SHA-512 matches CloudTalk's update feed (latest-mac.yml); the
+# SHA-256 below was taken from the same file on 2026-11-25.
+CT_VERSION="6.0.2"
+CT_URL="https://cloudtalk-phone-distribution.s3.amazonaws.com/CloudTalk-Phone-6.0.2-mac.zip"
+CT_SHA256="babf8a77936936dbf53961c06e2f26f20aa43a31ab0ed50dc714a16ecccd1ba6"
+CT_TEAM="7SQQD5UJAM"   # CloudTalk s.r.o.
+APP="/Applications/CloudTalk Phone.app"
+
+WORK=$(mktemp -d /private/tmp/intergate-app-install.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+install_cloudtalk() {
+  if [ -d "$APP" ]; then
+    echo "cloudtalk: already installed, skipped"
+    return 0
+  fi
+  curl -fsSL --retry 3 -o "$WORK/ct.zip" "$CT_URL" || { echo "cloudtalk: download failed"; return 1; }
+  local got
+  got=$(shasum -a 256 "$WORK/ct.zip" | awk '{print $1}')
+  if [ "$got" != "$CT_SHA256" ]; then
+    echo "cloudtalk: fingerprint mismatch ($got), not installed"
+    return 1
+  fi
+  ditto -x -k "$WORK/ct.zip" "$WORK/ct" || { echo "cloudtalk: unzip failed"; return 1; }
+  local app
+  app=$(find "$WORK/ct" -maxdepth 2 -name 'CloudTalk Phone.app' -type d | head -1)
+  [ -n "$app" ] || { echo "cloudtalk: app not found in zip"; return 1; }
+  codesign --verify --deep --strict "$app" || { echo "cloudtalk: signature check failed"; return 1; }
+  codesign -dv "$app" 2>&1 | grep -q "TeamIdentifier=$CT_TEAM" || { echo "cloudtalk: not signed by $CT_TEAM"; return 1; }
+  ditto "$app" "$APP" || { echo "cloudtalk: copy failed"; return 1; }
+
+  # Give the app to the person signed in, so CloudTalk's own updates can
+  # install without an admin. If nobody is signed in, it stays with root.
+  local user
+  user=$(stat -f%Su /dev/console)
+  case "$user" in
+    ""|root|loginwindow|_mbsetupuser) echo "cloudtalk: no one signed in, app left with root" ;;
+    *) chown -R "$user":staff "$APP" && echo "cloudtalk: app given to $user" ;;
+  esac
+  echo "cloudtalk: installed $CT_VERSION"
+}
+
+failed=0
+install_cloudtalk || failed=1
+
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') end: Install CloudTalk (failed=$failed)"
+# A non-zero exit marks the install as failed, so Apple Business can try again.
+exit "$failed"
